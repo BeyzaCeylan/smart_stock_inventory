@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
 import 'dart:typed_data';
+import 'package:flutter/services.dart' show rootBundle;
 
 void main() {
   runApp(MyApp());
@@ -32,6 +33,7 @@ class _MyHomePageState extends State<MyHomePage> {
   File? _image;
   final picker = ImagePicker();
   List<Map<String, dynamic>> detectedObjects = [];
+  List<String> labels = [];
 
   @override
   void initState() {
@@ -39,24 +41,38 @@ class _MyHomePageState extends State<MyHomePage> {
     loadModel();
   }
 
-  // Modeli yükle
+  /// **📌 Modeli ve Etiketleri Yükle**
   Future<void> loadModel() async {
     try {
       _interpreter = await Interpreter.fromAsset('assets/1.tflite');
-      print("Model loaded successfully");
+      print("✅ Model başarıyla yüklendi");
 
       // Modelin giriş ve çıkış tensörlerini kontrol et
       var inputTensors = _interpreter.getInputTensors();
       var outputTensors = _interpreter.getOutputTensors();
 
-      print("Input Tensors: $inputTensors");
-      print("Output Tensors: $outputTensors");
+      print("📌 Giriş Tensors: $inputTensors");
+      print("📌 Çıkış Tensors: $outputTensors");
+
+      // Etiketleri oku
+      await loadLabels();
     } catch (e) {
-      print("Error loading model: $e");
+      print("🚨 Model yükleme hatası: $e");
     }
   }
 
-  // Kameradan veya galeriden resim seçme
+  /// **📌 `labelmap.txt` dosyasını oku**
+  Future<void> loadLabels() async {
+    try {
+      String labelsData = await rootBundle.loadString('assets/labelmap.txt');
+      labels = labelsData.split('\n').where((label) => label.isNotEmpty).toList();
+      print("✅ Etiketler yüklendi: $labels");
+    } catch (e) {
+      print("🚨 Etiket dosyası yüklenemedi: $e");
+    }
+  }
+
+  /// **📌 Kameradan veya galeriden resim seç**
   Future<void> _getImage(ImageSource source) async {
     final pickedFile = await picker.pickImage(source: source);
     if (pickedFile != null) {
@@ -67,126 +83,121 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  // Modeli çalıştırma ve çıktıları alabilme
-  Future<void> runInference() async {
-    // Null kontrolü
-    if (_interpreter == null) {
-      print("Interpreter not initialized yet.");
-      return;
-    }
+  /// **📌 Modeli çalıştır ve nesne tespiti yap**
+ Future<void> runInference() async {
+  if (_interpreter == null) {
+    print("🚨 Model yüklenmemiş!");
+    return;
+  }
 
-    // Resmi yükle ve işleme
-    var input = await _image?.readAsBytes();
-    if (input == null) {
-      print("Image not loaded.");
-      return;
-    }
+  if (_image == null) {
+    print("🚨 Resim seçilmedi!");
+    return;
+  }
 
-    var image = img.decodeImage(input);
-    if (image == null) {
-      print("Image decoding failed.");
-      return;
-    }
+  var input = await _image?.readAsBytes();
+  if (input == null) {
+    print("🚨 Resim yüklenemedi!");
+    return;
+  }
 
-    // Resmi 300x300 boyutuna getir
-    image = img.copyResize(image, width: 300, height: 300);
+  var image = img.decodeImage(input);
+  if (image == null) {
+    print("🚨 Resim decode edilemedi!");
+    return;
+  }
 
-    // RGB formatında dönüştürme
-    img.Image rgbImage = img.Image.from(image);
+  // **📌 Resmi 300x300 boyutuna getir**
+  image = img.copyResize(image, width: 300, height: 300);
 
-    // UINT8 formatına dönüştürme
-    List<int> uint8List = rgbImage.getBytes();
-    var inputData = Uint8List.fromList(uint8List);
+  // **📌 Giriş verisini `uint8` formatına çevir**
+  Uint8List inputData = Uint8List(300 * 300 * 3);
+  int pixelIndex = 0;
 
-    // Quantization parametrelerini uygula
-    inputData = Uint8List.fromList(inputData.map((value) => (value - 128) ~/ 1).toList());
+  for (int y = 0; y < 300; y++) {
+    for (int x = 0; x < 300; x++) {
+      img.Pixel pixel = image.getPixel(x, y);
 
-    if (inputData == null) {
-      print("Input data is null.");
-      return;
-    }
-
-    // Çıktı için listeler oluştur
-    var outputLocations = List.generate(1, (i) {
-      return List.generate(10, (j) {
-        return List.filled(4, 0.0);
-      });
-    });
-    var outputClasses = List.generate(1, (i) => List.filled(10, 0.0));
-    var outputScores = List.generate(1, (i) => List.filled(10, 0.0));
-    var numDetections = List.filled(1, 0.0);
-
-    // Modeli çalıştır
-    try {
-      _interpreter.runForMultipleInputs(
-        [inputData.buffer.asUint8List()],
-        {
-          0: outputLocations,
-          1: outputClasses,
-          2: outputScores,
-          3: numDetections,
-        },
-      );
-
-      // Çıktıları işle
-      processOutput(outputLocations, outputClasses, outputScores, numDetections);
-    } catch (e) {
-      print("Error running inference: $e");
+      inputData[pixelIndex++] = pixel.r.toInt(); // Kırmızı bileşen
+      inputData[pixelIndex++] = pixel.g.toInt(); // Yeşil bileşen
+      inputData[pixelIndex++] = pixel.b.toInt(); // Mavi bileşen
     }
   }
 
-  // Modelin çıktısını işleme
+  // **📌 Model çıktıları için tensörleri hazırla**
+  var outputLocations = List.generate(1, (i) {
+    return List.generate(10, (j) {
+      return List.filled(4, 0.0);
+    });
+  });
+  var outputClasses = List.generate(1, (i) => List.filled(10, 0.0));
+  var outputScores = List.generate(1, (i) => List.filled(10, 0.0));
+  var numDetections = List.filled(1, 0.0);
+
+  // **📌 Modeli çalıştır**
+  try {
+    _interpreter.runForMultipleInputs(
+      [inputData], // **Giriş verisi `uint8` olarak gönderiliyor**
+      {
+        0: outputLocations,
+        1: outputClasses,
+        2: outputScores,
+        3: numDetections,
+      },
+    );
+
+    processOutput(outputLocations, outputClasses, outputScores, numDetections);
+  } catch (e) {
+    print("🚨 Model çalıştırma hatası: $e");
+  }
+}
+
+
+
+  /// **📌 Modelin çıktısını işle ve nesneleri belirle**
   void processOutput(
     List<List<List<double>>> outputLocations,
     List<List<double>> outputClasses,
     List<List<double>> outputScores,
-    List<double> numDetections,
-  ) {
-    detectedObjects.clear();
+    List<double> numDetections) {
+  
+  detectedObjects.clear(); // Önceki tespitleri temizle
 
-    int numResults = numDetections[0].toInt();
-    for (int i = 0; i < numResults; i++) {
-      double score = outputScores[0][i];
-      if (score > 0.5) {  // Güven skoru 0.5'ten büyükse
-        List<double> boundingBox = outputLocations[0][i];
-        int classId = outputClasses[0][i].toInt();
+  int numResults = numDetections[0].toInt(); // Algılanan nesne sayısını al
+  for (int i = 0; i < numResults; i++) {
+    double score = outputScores[0][i]; // Modelin güven skoru
 
-        // Sınıf ID'sine göre etiketi belirle
-        String label = _getLabelFromClassId(classId);
+    if (score > 0.6) {  // Eğer güven skoru 0.5’ten büyükse geçerli kabul et
+      List<double> boundingBox = outputLocations[0][i]; // Nesnenin koordinatları
+      int classId = outputClasses[0][i].toInt(); // Sınıf ID’sini al
+      String detectedLabel = _getLabelFromClassId(classId); // ID'yi etikete çevir
 
-        detectedObjects.add({
-          'label': label,  // Etiket
-          'confidence': score,  // Güven skoru
-          'boundingBox': boundingBox,  // Bounding box koordinatları
-        });
-      }
+      // Algılanan nesneyi listeye ekle
+      detectedObjects.add({
+        'label': detectedLabel,  // Örneğin: 'cat', 'banana' vs.
+        'confidence': score,  // Güven skoru
+        'boundingBox': boundingBox,  // Nesnenin koordinatları
+      });
     }
-
-    setState(() {});
   }
 
-  // Sınıf ID'sine göre etiketi belirle
+  setState(() {}); // Ekranı güncelle
+}
+
+
+  /// **📌 Sınıf ID'sine göre etiketi al**
   String _getLabelFromClassId(int classId) {
-    switch (classId) {
-      case 0:
-        return 'Person';
-      case 1:
-        return 'Car';
-      case 2:
-        return 'Dog';
-      case 3:
-        return 'Cat';
-      default:
-        return 'Object $classId';
+    if (classId < labels.length) {
+      return labels[classId];
+    } else {
+      return 'Unknown';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text("Inventory Counting with CV"),
-      ),
+      appBar: AppBar(title: Text("Inventory Counting with CV")),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -200,47 +211,28 @@ class _MyHomePageState extends State<MyHomePage> {
                     ],
                   ),
             SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () => _getImage(ImageSource.camera),
-              child: Text("Capture Image"),  // Kameradan resim çekme
-            ),
+            ElevatedButton(onPressed: () => _getImage(ImageSource.camera), child: Text("Capture Image")),
             SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () => _getImage(ImageSource.gallery),
-              child: Text("Select Image from Gallery"),  // Galeriden resim seçme
-            ),
+            ElevatedButton(onPressed: () => _getImage(ImageSource.gallery), child: Text("Select Image from Gallery")),
           ],
         ),
       ),
     );
   }
 
-  // Bounding box'ları çizme
+  /// **📌 Bounding box'ları çiz**
   List<Widget> _getBoundingBoxes() {
     List<Widget> boxes = [];
     for (var detectedObject in detectedObjects) {
       var boundingBox = detectedObject['boundingBox'];
-      var left = boundingBox[1] * 300;  // Xmin
-      var top = boundingBox[0] * 300;   // Ymin
-      var right = boundingBox[3] * 300; // Xmax
-      var bottom = boundingBox[2] * 300;// Ymax
-
       boxes.add(Positioned(
-        left: left,
-        top: top,
+        left: boundingBox[1] * 300,
+        top: boundingBox[0] * 300,
         child: Container(
-          width: right - left,
-          height: bottom - top,
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.yellow, width: 3),
-            borderRadius: BorderRadius.circular(5),
-          ),
-          child: Center(
-            child: Text(
-              detectedObject['label']!,
-              style: TextStyle(color: Colors.yellow, fontSize: 16),
-            ),
-          ),
+          width: boundingBox[3] * 300 - boundingBox[1] * 300,
+          height: boundingBox[2] * 300 - boundingBox[0] * 300,
+          decoration: BoxDecoration(border: Border.all(color: Colors.yellow, width: 3)),
+          child: Center(child: Text(detectedObject['label'], style: TextStyle(color: Colors.yellow))),
         ),
       ));
     }
