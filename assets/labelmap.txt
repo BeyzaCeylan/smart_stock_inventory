@@ -38,19 +38,19 @@ baseball glove
 skateboard
 surfboard
 tennis racket
-bottle
-wine glass
-cup
 fork
-knife
 spoon
 bowl
+bottle
+knife
+wine glass
+cup
 broccoli
-apple
+cake
 sandwich
 orange
 banana
-cake
+apple
 hot dog
 couch
 potted plant
